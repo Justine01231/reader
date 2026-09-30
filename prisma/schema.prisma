@@ -1,0 +1,280 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum MediaType {
+  MANGA
+  MANHWA
+  MANHUA
+  WEBTOON
+  COMIC
+  ANIME
+  LIGHT_NOVEL
+  NOVEL
+  OTHER
+}
+
+enum MediaStatus {
+  ONGOING
+  COMPLETED
+  HIATUS
+  CANCELLED
+  UNKNOWN
+}
+
+enum LibraryStatus {
+  READING
+  COMPLETED
+  ON_HOLD
+  DROPPED
+  PLAN_TO_READ
+}
+
+enum PersonRole {
+  AUTHOR
+  ARTIST
+  WRITER
+  ILLUSTRATOR
+  CREATOR
+}
+
+enum ReaderTheme {
+  PAPER
+  DARK
+  SEPIA
+  MIDNIGHT
+}
+
+// ---------------------------------------------------------------------------
+// Users & sessions
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String  @id @default(cuid())
+  username     String  @unique
+  passwordHash String
+  displayName  String
+  bio          String?
+  avatar       String?
+
+  // Reading preferences (applied by the line reader).
+  readerTheme    ReaderTheme @default(PAPER)
+  readerFontSize Int?
+  readerMeasure  Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sessions      Session[]
+  libraryEntries LibraryEntry[]
+  bookmarks     Bookmark[]
+  readingDays   ReadingDay[]
+  favorites     Favorite[]
+  createdMedia  Media[]  @relation("CreatedMedia")
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  // SHA-256 hash of the random token stored in the cookie.
+  tokenHash String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+// ---------------------------------------------------------------------------
+// Media (the central concept: manga, manhwa, manhua, webtoon, comic, anime, novel, ...)
+// ---------------------------------------------------------------------------
+
+model Media {
+  id          String      @id @default(cuid())
+  title       String
+  slug        String      @unique
+  description String?
+  type        MediaType
+  status      MediaStatus @default(ONGOING)
+  coverImage  String?
+  releaseYear Int?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  // User who added this title; null for seeded/catalog titles.
+  createdBy String?
+  creator   User? @relation("CreatedMedia", fields: [createdBy], references: [id], onDelete: SetNull)
+
+  genres         MediaGenre[]
+  mediaPersons   MediaPerson[]
+  chapters       Chapter[]
+  libraryEntries LibraryEntry[]
+  bookmarks      Bookmark[]
+  favorites      Favorite[]
+
+  @@index([type])
+  @@index([title])
+  @@map("media")
+}
+
+model Genre {
+  id   String @id @default(cuid())
+  name String @unique
+
+  media MediaGenre[]
+
+  @@map("genres")
+}
+
+model MediaGenre {
+  mediaId String
+  genreId String
+
+  media Media @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  genre Genre @relation(fields: [genreId], references: [id], onDelete: Cascade)
+
+  @@id([mediaId, genreId])
+  @@map("media_genres")
+}
+
+model Person {
+  id         String   @id @default(cuid())
+  name       String
+  biography  String?
+  image      String?
+  createdAt  DateTime @default(now())
+
+  mediaPersons MediaPerson[]
+
+  @@map("persons")
+}
+
+model MediaPerson {
+  mediaId  String
+  personId String
+  role     PersonRole
+
+  media  Media  @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  person Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  @@id([mediaId, personId])
+  @@index([personId])
+  @@map("media_persons")
+}
+
+model Chapter {
+  id            String   @id @default(cuid())
+  mediaId       String
+  chapterNumber Int?
+  volumeNumber  Int?
+  title         String?
+  content       String?
+  releaseDate   DateTime?
+  createdAt     DateTime @default(now())
+
+  media Media @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@unique([mediaId, chapterNumber])
+  @@index([mediaId, volumeNumber])
+  @@map("chapters")
+}
+
+// ---------------------------------------------------------------------------
+// User library
+// ---------------------------------------------------------------------------
+
+model LibraryEntry {
+  id             String        @id @default(cuid())
+  userId         String
+  mediaId        String
+  status         LibraryStatus @default(PLAN_TO_READ)
+  rating         Int?
+  currentChapter Int?
+  // Scroll offset (px) within the chapter the user last read.
+  readingPosition Int?
+  notes          String?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  media Media @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, mediaId])
+  @@index([userId, status])
+  @@map("library_entries")
+}
+
+// ---------------------------------------------------------------------------
+// Bookmarks
+// ---------------------------------------------------------------------------
+
+model Bookmark {
+  id            String   @id @default(cuid())
+  userId        String
+  mediaId       String
+  // Chapter + scroll offset (px) saved via the reader (M / B).
+  chapterNumber Int
+  position      Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  media Media @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  // One saved place per title; saving again moves the bookmark.
+  @@unique([userId, mediaId])
+  @@index([userId, createdAt])
+  @@map("bookmarks")
+}
+
+// ---------------------------------------------------------------------------
+// Reading stats
+// ---------------------------------------------------------------------------
+
+model ReadingDay {
+  id         String   @id @default(cuid())
+  userId     String
+  // Calendar day (UTC midnight) the reader spent time on.
+  date       DateTime @db.Date
+  msRead     Int      @default(0)
+  updatedAt  DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId, date])
+  @@map("reading_days")
+}
+
+// ---------------------------------------------------------------------------
+// Favorites
+// ---------------------------------------------------------------------------
+
+model Favorite {
+  id        String   @id @default(cuid())
+  userId    String
+  mediaId   String
+  createdAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  media Media @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, mediaId])
+  @@index([userId, createdAt])
+  @@map("favorites")
+}
